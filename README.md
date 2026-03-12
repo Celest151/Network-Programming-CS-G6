@@ -62,6 +62,44 @@ http://localhost:8784/
 
 If you are testing from another device on the same network, replace `localhost` with the server machine's IP address.
 
+## Player Guide
+
+### Quick Start
+
+1. Start the server with `./server 8784`.
+2. Open `http://localhost:8784/` in a browser.
+3. Open the same URL in a second tab, another browser, or another device.
+
+### Creating a Room
+
+1. Enter a username.
+2. Enter a 5-digit room code, or click `Generate`.
+3. Choose the board size.
+4. Choose the win length.
+5. Click `Join Room`.
+
+The first player to join becomes the host for the room settings. If the room is not full yet, joining again with different size or win-length settings will update that room before the second player locks it in.
+
+### Joining an Existing Room
+
+1. Enter a username.
+2. Enter the same 5-digit room code as the other player.
+3. Click `Join Room`.
+
+The first player in that room becomes `X`, and the second player becomes `O`.
+
+### During the Match
+
+1. Wait until both players have joined.
+2. Watch the status badge to see whose turn it is.
+3. Click an empty cell to place your mark.
+4. Continue until one player connects the required number of marks, or the board fills and ends in a draw.
+
+### Leaving a Room
+
+1. Click `Leave Room` to exit manually.
+2. Closing the tab also removes the player session after disconnect handling runs.
+
 ## How to Play
 
 - Enter the same 5-digit room code in two tabs or two browsers.
@@ -73,6 +111,149 @@ If you are testing from another device on the same network, replace `localhost` 
 - Click an empty square when it is your turn.
 - Use the theme button to switch between light and dark mode.
 - Click `Leave Room` to quit the room.
+
+## Deploying Publicly
+
+This server is a plain HTTP service written in C. To let people access it globally, deploy it on a Linux server or VPS with a public IP address.
+
+### 1. Prepare a Linux Server
+
+Typical options:
+
+- Ubuntu VPS on DigitalOcean, Hetzner, Linode, AWS, or similar
+- A home Linux machine with port forwarding configured on the router
+
+Install build tools on Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install build-essential
+```
+
+### 2. Upload the Project
+
+Copy the project to the server:
+
+```bash
+scp -r ./Network-Programming-CS-G6 user@your-server-ip:/home/user/tictactoe
+```
+
+Or clone it directly on the server if it is in a Git repository.
+
+### 3. Build on the Server
+
+```bash
+cd /home/user/tictactoe
+make
+```
+
+### 4. Run the Server
+
+Example on port `8784`:
+
+```bash
+./server 8784
+```
+
+People can then access it using:
+
+```text
+http://your-server-ip:8784/
+```
+
+### 5. Open the Firewall
+
+If your server uses `ufw`:
+
+```bash
+sudo ufw allow 8784/tcp
+sudo ufw status
+```
+
+If you are behind a router at home, forward external TCP port `8784` to the machine running the server.
+
+### 6. Keep It Running
+
+Simple background run:
+
+```bash
+nohup ./server 8784 > server.log 2>&1 &
+```
+
+Better option with `systemd`:
+
+Create `/etc/systemd/system/tictactoe.service`:
+
+```ini
+[Unit]
+Description=Tic-Tac-Toe Web Server
+After=network.target
+
+[Service]
+User=youruser
+WorkingDirectory=/home/youruser/tictactoe
+ExecStart=/home/youruser/tictactoe/server 8784
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now tictactoe
+sudo systemctl status tictactoe
+```
+
+### 7. Optional: Put It Behind Nginx
+
+If you want a cleaner public URL such as `http://game.yourdomain.com/` or later add HTTPS with Let's Encrypt, place Nginx in front of the C server.
+
+Example Nginx site config:
+
+```nginx
+server {
+    listen 80;
+    server_name game.yourdomain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8784;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Reload Nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Then users can access:
+
+```text
+http://game.yourdomain.com/
+```
+
+### 8. Optional: HTTPS
+
+For public access, HTTPS is recommended. If you have a domain and Nginx installed, Certbot is the usual next step:
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d game.yourdomain.com
+```
+
+After that, players can use:
+
+```text
+https://game.yourdomain.com/
+```
 
 ## How This Project Uses Course Knowledge
 
