@@ -325,6 +325,19 @@ h2 {
   text-shadow: 0 0 20px var(--glow);
 }
 
+.cell.placed-x,
+.cell.placed-o {
+  animation: cell-pop 260ms ease;
+}
+
+.cell.placed-x {
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.22), 0 16px 30px rgba(56, 189, 248, 0.18);
+}
+
+.cell.placed-o {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.22), 0 16px 30px rgba(16, 185, 129, 0.18);
+}
+
 .board[data-size="5"] .cell {
   font-size: clamp(1rem, 1.9vw, 2rem);
 }
@@ -361,6 +374,77 @@ h2 {
 .instructions {
   color: var(--muted);
   line-height: 1.65;
+}
+
+.announce-box {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 14px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: white;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
+}
+
+.announce-box.win {
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+}
+
+.announce-box.lose {
+  background: linear-gradient(135deg, #b91c1c, #ef4444);
+}
+
+.announce-box.draw {
+  background: linear-gradient(135deg, #475569, #64748b);
+}
+
+.confetti-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 35;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -24px;
+  width: 10px;
+  height: 18px;
+  border-radius: 3px;
+  opacity: 0.95;
+  animation: confetti-fall 2.2s ease forwards;
+}
+
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(540deg);
+    opacity: 0;
+  }
+}
+
+@keyframes cell-pop {
+  0% {
+    transform: scale(0.82);
+  }
+  70% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 @media (max-width: 980px) {

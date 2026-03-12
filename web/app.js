@@ -5,6 +5,7 @@ const generateBtn = document.getElementById("generateBtn");
 const usernameInput = document.getElementById("usernameInput");
 const roomInput = document.getElementById("roomInput");
 const sizeSelect = document.getElementById("sizeSelect");
+const winSelect = document.getElementById("winSelect");
 const roomLabelEl = document.getElementById("roomLabel");
 const playerMarkEl = document.getElementById("playerMark");
 const playerNameEl = document.getElementById("playerName");
@@ -14,13 +15,19 @@ const sizeTextEl = document.getElementById("sizeText");
 const turnBadgeEl = document.getElementById("turnBadge");
 const themeBtn = document.getElementById("themeBtn");
 const themeIcon = document.getElementById("themeIcon");
+const announceBox = document.getElementById("announceBox");
+const confettiLayer = document.getElementById("confettiLayer");
 
 const state = {
   token: sessionStorage.getItem("ttt-player-token") || "",
   room: sessionStorage.getItem("ttt-room-code") || "",
   username: sessionStorage.getItem("ttt-username") || "",
   boardSize: Number(sessionStorage.getItem("ttt-board-size") || "3"),
+  winLength: Number(sessionStorage.getItem("ttt-win-length") || "3"),
   canMove: false,
+  lastBoard: "",
+  lastWinner: "-",
+  lastDraw: false,
   polling: null,
   theme: localStorage.getItem("ttt-theme") || "light"
 };
@@ -56,11 +63,25 @@ function createBoard(size) {
   }
 }
 
-function saveSession(token, room, boardSize = state.boardSize, username = state.username) {
+function syncWinOptions() {
+  const boardSize = Number(sizeSelect.value || state.boardSize || 3);
+  const currentWin = Number(winSelect.value || state.winLength || 3);
+
+  Array.from(winSelect.options).forEach((option) => {
+    option.disabled = Number(option.value) > boardSize;
+  });
+
+  if (currentWin > boardSize) {
+    winSelect.value = String(Math.max(3, boardSize));
+  }
+}
+
+function saveSession(token, room, boardSize = state.boardSize, username = state.username, winLength = state.winLength) {
   state.token = token || "";
   state.room = room || "";
   state.username = username || "";
   state.boardSize = boardSize;
+  state.winLength = winLength;
 
   if (state.token) {
     sessionStorage.setItem("ttt-player-token", state.token);
@@ -81,6 +102,7 @@ function saveSession(token, room, boardSize = state.boardSize, username = state.
   }
 
   sessionStorage.setItem("ttt-board-size", String(state.boardSize));
+  sessionStorage.setItem("ttt-win-length", String(state.winLength));
 }
 
 function applyTheme(theme) {
@@ -112,6 +134,7 @@ function setJoinedState(joined) {
   usernameInput.disabled = joined;
   roomInput.disabled = joined;
   sizeSelect.disabled = joined;
+  winSelect.disabled = joined;
   generateBtn.disabled = joined;
 }
 
@@ -123,10 +146,42 @@ function renderBoard(board, canMove) {
   cells.forEach((cellEl, index) => {
     const value = board[index];
     const empty = value === "_";
+    const previous = state.lastBoard[index];
     cellEl.textContent = empty ? String(index + 1) : value;
     cellEl.disabled = !empty || !canMove;
     cellEl.classList.toggle("filled", !empty);
+    cellEl.classList.remove("placed-x", "placed-o");
+    if (previous && previous === "_" && !empty) {
+      cellEl.classList.add(value === "X" ? "placed-x" : "placed-o");
+    }
   });
+  state.lastBoard = board;
+}
+
+function showAnnouncement(message, tone) {
+  announceBox.textContent = message;
+  announceBox.className = `announce-box ${tone}`;
+  announceBox.hidden = false;
+}
+
+function hideAnnouncement() {
+  announceBox.hidden = true;
+  announceBox.className = "announce-box";
+}
+
+function launchConfetti() {
+  confettiLayer.innerHTML = "";
+  for (let i = 0; i < 28; i += 1) {
+    const piece = document.createElement("span");
+    piece.className = "confetti-piece";
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.animationDelay = `${Math.random() * 0.25}s`;
+    piece.style.background = i % 3 === 0 ? "#22c55e" : (i % 3 === 1 ? "#f59e0b" : "#38bdf8");
+    confettiLayer.appendChild(piece);
+  }
+  window.setTimeout(() => {
+    confettiLayer.innerHTML = "";
+  }, 2400);
 }
 
 function resetView() {
@@ -135,15 +190,22 @@ function resetView() {
   playerMarkEl.textContent = "Not joined";
   playerNameEl.textContent = state.username || "Guest";
   playersTextEl.textContent = "0 / 2";
-  sizeTextEl.textContent = `${state.boardSize} x ${state.boardSize}`;
+  sizeTextEl.textContent = `${state.boardSize} x ${state.boardSize} / C${state.winLength}`;
   turnBadgeEl.textContent = "Idle";
   roomLabelEl.textContent = state.room || "None";
+  winSelect.value = String(state.winLength);
+  hideAnnouncement();
+  state.lastWinner = "-";
+  state.lastDraw = false;
 }
 
 function updateUi(snapshot) {
   state.canMove = Boolean(snapshot.canMove);
   state.boardSize = Number(snapshot.boardSize);
+  state.winLength = Number(snapshot.winLength);
   sizeSelect.value = String(state.boardSize);
+  winSelect.value = String(state.winLength);
+  syncWinOptions();
 
   renderBoard(snapshot.board, state.canMove);
   roomLabelEl.textContent = snapshot.room;
@@ -151,18 +213,36 @@ function updateUi(snapshot) {
   playerNameEl.textContent = snapshot.role === "player" ? snapshot.yourName : (state.username || "Guest");
   playersTextEl.textContent = `${snapshot.playersConnected} / 2`;
   statusTextEl.textContent = snapshot.status;
-  sizeTextEl.textContent = `${snapshot.boardSize} x ${snapshot.boardSize}`;
+  sizeTextEl.textContent = `${snapshot.boardSize} x ${snapshot.boardSize} / C${snapshot.winLength}`;
 
   if (snapshot.winner !== "-") {
     turnBadgeEl.textContent = `Winner ${snapshot.winner}`;
+    if (snapshot.role === "player") {
+      if (snapshot.winner === snapshot.yourMark && state.lastWinner !== snapshot.winner) {
+        showAnnouncement(`Victory: ${snapshot.yourName} connected ${snapshot.winLength}.`, "win");
+        launchConfetti();
+      } else if (snapshot.winner !== snapshot.yourMark && state.lastWinner !== snapshot.winner) {
+        showAnnouncement(`Defeat: ${snapshot.winner} took the round.`, "lose");
+      }
+    }
+    state.lastDraw = false;
   } else if (snapshot.draw) {
     turnBadgeEl.textContent = "Draw";
+    if (!state.lastDraw) {
+      showAnnouncement("Draw game.", "draw");
+    }
+    state.lastDraw = true;
   } else if (!snapshot.gameStarted) {
     turnBadgeEl.textContent = "Waiting";
+    hideAnnouncement();
+    state.lastDraw = false;
   } else {
     turnBadgeEl.textContent = `Turn ${snapshot.currentTurn}`;
+    hideAnnouncement();
+    state.lastDraw = false;
   }
 
+  state.lastWinner = snapshot.winner;
   setJoinedState(snapshot.role === "player");
 }
 
@@ -172,7 +252,7 @@ async function joinRoom() {
   roomInput.value = desiredRoom;
   usernameInput.value = desiredUsername;
 
-  if (desiredRoom.length < 3) {
+  if (desiredRoom.length !== 5) {
     statusTextEl.textContent = "Use a 5-digit room code.";
     return;
   }
@@ -184,7 +264,14 @@ async function joinRoom() {
 
   try {
     const requestedSize = String(Number(sizeSelect.value || state.boardSize || 3));
-    const body = new URLSearchParams({ room: desiredRoom, size: requestedSize, username: desiredUsername });
+    syncWinOptions();
+    const requestedWin = String(Number(winSelect.value || state.winLength || 3));
+    const body = new URLSearchParams({
+      room: desiredRoom,
+      size: requestedSize,
+      win: requestedWin,
+      username: desiredUsername
+    });
     if (state.token) {
       body.set("token", state.token);
     }
@@ -193,10 +280,17 @@ async function joinRoom() {
       body
     });
 
-    saveSession(data.token, data.room, Number(data.boardSize || requestedSize), data.username || desiredUsername);
+    saveSession(
+      data.token,
+      data.room,
+      Number(data.boardSize || requestedSize),
+      data.username || desiredUsername,
+      Number(data.winLength || requestedWin)
+    );
     roomInput.value = data.room;
     usernameInput.value = state.username;
     sizeSelect.value = String(state.boardSize);
+    winSelect.value = String(state.winLength);
     statusTextEl.textContent = data.message;
     setJoinedState(true);
     await refreshState();
@@ -222,11 +316,12 @@ async function leaveRoom() {
   } catch (error) {
     statusTextEl.textContent = error.message;
   } finally {
-    saveSession("", state.room, state.boardSize, state.username);
+    saveSession("", state.room, state.boardSize, state.username, state.winLength);
     setJoinedState(false);
     playerMarkEl.textContent = "Not joined";
     playerNameEl.textContent = state.username || "Guest";
     sizeSelect.value = String(state.boardSize);
+    winSelect.value = String(state.winLength);
   }
 }
 
@@ -251,6 +346,7 @@ async function refreshState() {
       roomInput.value = "";
       sizeSelect.value = String(state.boardSize);
       roomLabelEl.textContent = "None";
+      winSelect.value = String(state.winLength);
     }
     statusTextEl.textContent = error.message;
   }
@@ -303,6 +399,10 @@ generateBtn.addEventListener("click", () => {
   roomInput.value = generateRoomCode();
 });
 
+sizeSelect.addEventListener("change", () => {
+  syncWinOptions();
+});
+
 roomInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -321,6 +421,8 @@ applyTheme(state.theme);
 usernameInput.value = state.username;
 roomInput.value = state.room;
 sizeSelect.value = String(state.boardSize);
+winSelect.value = String(state.winLength);
+syncWinOptions();
 resetView();
 refreshState();
 state.polling = window.setInterval(refreshState, 1000);

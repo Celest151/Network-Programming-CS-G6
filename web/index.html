@@ -47,6 +47,17 @@
               <option value="8">8 x 8</option>
             </select>
           </label>
+          <label class="field">
+            <span>Win length</span>
+            <select id="winSelect">
+              <option value="3">Connect 3</option>
+              <option value="4">Connect 4</option>
+              <option value="5">Connect 5</option>
+              <option value="6">Connect 6</option>
+              <option value="7">Connect 7</option>
+              <option value="8">Connect 8</option>
+            </select>
+          </label>
           <div class="action-row">
             <button id="joinBtn" class="primary" type="button">Join Room</button>
             <button id="leaveBtn" class="ghost" type="button" disabled>Leave Room</button>
@@ -92,12 +103,14 @@
           </div>
           <div>
             <p class="label">Notes</p>
-            <p class="instructions">The first player to create a room locks its board size. Share the same room code so another player can join.</p>
+            <p class="instructions">A room can be resized before the match fills. Default win length is 3, and the host can raise it up to the board size.</p>
           </div>
         </div>
       </article>
     </section>
   </main>
+  <div id="announceBox" class="announce-box" hidden></div>
+  <div id="confettiLayer" class="confetti-layer" aria-hidden="true"></div>
 
   <script src="/app.js"></script>
 </body>

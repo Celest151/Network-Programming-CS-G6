@@ -26,6 +26,7 @@
 #define USERNAME_SIZE 32
 #define PLAYER_TIMEOUT 20
 #define MAX_ROOMS 64
+#define DEFAULT_WIN_LENGTH 3
 
 typedef struct {
     int active;
@@ -39,6 +40,7 @@ typedef struct {
     int in_use;
     char code[ROOM_CODE_SIZE];
     int board_size;
+    int win_length;
     char board[MAX_BOARD_CELLS];
     Player players[2];
     int current_turn;
@@ -84,13 +86,19 @@ static int send_all(int fd, const void *buf, size_t len) {
     return 0;
 }
 
-static int check_line(const char *board, int board_size, int row, int col, int row_step, int col_step) {
+static int check_line(const char *board,
+                      int board_size,
+                      int win_length,
+                      int row,
+                      int col,
+                      int row_step,
+                      int col_step) {
     char first = board[(row * board_size) + col];
     if (first == ' ') {
         return 0;
     }
 
-    for (int step = 1; step < board_size; ++step) {
+    for (int step = 1; step < win_length; ++step) {
         int next_row = row + (row_step * step);
         int next_col = col + (col_step * step);
         if (board[(next_row * board_size) + next_col] != first) {
@@ -101,27 +109,44 @@ static int check_line(const char *board, int board_size, int row, int col, int r
     return first;
 }
 
-static int check_winner(const char *board, int board_size) {
+static int check_winner(const char *board, int board_size, int win_length) {
     for (int row = 0; row < board_size; ++row) {
-        int row_win = check_line(board, board_size, row, 0, 0, 1);
-        if (row_win) {
-            return row_win;
+        for (int col = 0; col <= board_size - win_length; ++col) {
+            int row_win = check_line(board, board_size, win_length, row, col, 0, 1);
+            if (row_win) {
+                return row_win;
+            }
         }
     }
 
-    for (int col = 0; col < board_size; ++col) {
-        int col_win = check_line(board, board_size, 0, col, 1, 0);
-        if (col_win) {
-            return col_win;
+    for (int row = 0; row <= board_size - win_length; ++row) {
+        for (int col = 0; col < board_size; ++col) {
+            int col_win = check_line(board, board_size, win_length, row, col, 1, 0);
+            if (col_win) {
+                return col_win;
+            }
         }
     }
 
-    int diag_win = check_line(board, board_size, 0, 0, 1, 1);
-    if (diag_win) {
-        return diag_win;
+    for (int row = 0; row <= board_size - win_length; ++row) {
+        for (int col = 0; col <= board_size - win_length; ++col) {
+            int diag_win = check_line(board, board_size, win_length, row, col, 1, 1);
+            if (diag_win) {
+                return diag_win;
+            }
+        }
     }
 
-    return check_line(board, board_size, 0, board_size - 1, 1, -1);
+    for (int row = 0; row <= board_size - win_length; ++row) {
+        for (int col = win_length - 1; col < board_size; ++col) {
+            int diag_win = check_line(board, board_size, win_length, row, col, 1, -1);
+            if (diag_win) {
+                return diag_win;
+            }
+        }
+    }
+
+    return 0;
 }
 
 static void set_status(Room *room, const char *fmt, ...) {
@@ -143,10 +168,11 @@ static void reset_board(Room *room) {
     room->draw = 0;
 }
 
-static void init_room(Room *room, const char *code, int board_size) {
+static void init_room(Room *room, const char *code, int board_size, int win_length) {
     memset(room, 0, sizeof(*room));
     room->in_use = 1;
     room->board_size = board_size;
+    room->win_length = win_length;
     snprintf(room->code, sizeof(room->code), "%s", code);
     room->players[0].mark = 'X';
     room->players[1].mark = 'O';
@@ -237,10 +263,10 @@ static Room *find_room(ServerState *server, const char *code) {
     return NULL;
 }
 
-static Room *create_room(ServerState *server, const char *code, int board_size) {
+static Room *create_room(ServerState *server, const char *code, int board_size, int win_length) {
     for (int i = 0; i < MAX_ROOMS; ++i) {
         if (!server->rooms[i].in_use) {
-            init_room(&server->rooms[i], code, board_size);
+            init_room(&server->rooms[i], code, board_size, win_length);
             return &server->rooms[i];
         }
     }
@@ -259,6 +285,27 @@ static int parse_board_size(const char *input) {
         return 0;
     }
     return (int)value;
+}
+
+static int parse_win_length(const char *input, int board_size) {
+    long value;
+
+    if (input == NULL || input[0] == '\0') {
+        return DEFAULT_WIN_LENGTH;
+    }
+
+    value = strtol(input, NULL, 10);
+    if (value < 3 || value > board_size) {
+        return 0;
+    }
+    return (int)value;
+}
+
+static void reconfigure_room(Room *room, int board_size, int win_length) {
+    room->board_size = board_size;
+    room->win_length = win_length;
+    reset_board(room);
+    set_status(room, "Room %s updated to %dx%d, connect %d.", room->code, board_size, board_size, win_length);
 }
 
 static int normalize_username(const char *input, char *out, size_t out_size) {
@@ -625,6 +672,7 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
              "\"ok\":true,"
              "\"room\":\"%s\","
              "\"boardSize\":%d,"
+             "\"winLength\":%d,"
              "\"board\":\"%s\","
              "\"gameStarted\":%s,"
              "\"winner\":\"%c\","
@@ -641,6 +689,7 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
              "}",
              room->code,
              room->board_size,
+             room->win_length,
              board,
              room->game_started ? "true" : "false",
              room->winner ? room->winner : '-',
@@ -663,15 +712,18 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
     char username[USERNAME_SIZE];
     char normalized_username[USERNAME_SIZE];
     char size_text[16];
+    char win_text[16];
     char body[512];
     Room *room;
     int slot;
     int requested_size;
+    int requested_win_length;
 
     query_param(request->body, "room", requested_room, sizeof(requested_room));
     query_param(request->body, "token", token, sizeof(token));
     query_param(request->body, "username", username, sizeof(username));
     query_param(request->body, "size", size_text, sizeof(size_text));
+    query_param(request->body, "win", win_text, sizeof(win_text));
 
     if (!normalize_room_code(requested_room, normalized_room, sizeof(normalized_room))) {
         respond_json(client_fd,
@@ -695,14 +747,20 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
         return;
     }
 
+    requested_win_length = parse_win_length(win_text, requested_size);
+    if (requested_win_length == 0) {
+        respond_json(client_fd,
+                     "400 Bad Request",
+                     "{\"ok\":false,\"error\":\"bad_win_length\",\"message\":\"Winning length must be between 3 and the board size.\"}");
+        return;
+    }
+
     room = find_room(server, normalized_room);
     if (room == NULL) {
-        room = create_room(server, normalized_room, requested_size);
-    } else if (size_text[0] != '\0' && room->board_size != requested_size) {
-        respond_json(client_fd,
-                     "409 Conflict",
-                     "{\"ok\":false,\"error\":\"size_locked\",\"message\":\"This room already exists with a different board size.\"}");
-        return;
+        room = create_room(server, normalized_room, requested_size, requested_win_length);
+    } else if (!room->game_started && room_player_count(room) < 2 &&
+               (room->board_size != requested_size || room->win_length != requested_win_length)) {
+        reconfigure_room(room, requested_size, requested_win_length);
     }
     if (room == NULL) {
         respond_json(client_fd,
@@ -738,6 +796,7 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
              "\"ok\":true,"
              "\"room\":\"%s\","
              "\"boardSize\":%d,"
+             "\"winLength\":%d,"
              "\"token\":\"%s\","
              "\"mark\":\"%c\","
              "\"username\":\"%s\","
@@ -745,6 +804,7 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
              "}",
              room->code,
              room->board_size,
+             room->win_length,
              room->players[slot].token,
              room->players[slot].mark,
              room->players[slot].username,
@@ -861,11 +921,11 @@ static void handle_move(ServerState *server, int client_fd, const HttpRequest *r
 
     room->board[cell - 1] = room->players[slot].mark;
     room->move_count++;
-    room->winner = check_winner(room->board, room->board_size);
+    room->winner = check_winner(room->board, room->board_size, room->win_length);
 
     if (room->winner) {
         room->game_started = 0;
-        set_status(room, "Player %c won room %s.", room->winner, room->code);
+        set_status(room, "Player %c won room %s with connect %d.", room->winner, room->code, room->win_length);
     } else if (room->move_count == max_cell) {
         room->draw = 1;
         room->game_started = 0;

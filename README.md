@@ -2,7 +2,7 @@
 
 ## Architecture Summary
 
-This project is now a browser-based Tic-Tac-Toe game backed by a POSIX C server, with support for multiple custom rooms and host-selected board sizes.
+This project is now a browser-based Tic-Tac-Toe game backed by a POSIX C server, with support for multiple custom rooms, host-selected board sizes, and configurable connect lengths.
 
 - `server.c` is an HTTP server that owns the full game state for many rooms, validates all moves, assigns Player X and Player O inside each room, and handles disconnects by timing out inactive browser sessions.
 - `web/index.html`, `web/app.js`, and `web/styles.css` provide the browser UI, room-code entry flow, host-selected board sizes, and icon-based light/dark theme switcher.
@@ -24,8 +24,8 @@ Instead of a terminal client and custom text frames, this version uses HTTP as t
 - `GET /`: serves the game page
 - `GET /app.js`: serves browser logic
 - `GET /styles.css`: serves page styling
-- `POST /api/join`: joins or creates a room using a custom room code and optional `size=<3-8>` for the first player
-- `GET /api/state?room=<code>&player=<token>`: returns the board, board size, turn, winner, draw flag, and status text for one room
+- `POST /api/join`: joins or creates a room using a custom room code, `size=<3-8>`, `win=<3-size>`, and a username
+- `GET /api/state?room=<code>&player=<token>`: returns the board, board size, connect length, turn, winner, draw flag, and status text for one room
 - `POST /api/move`: submits `room=<code>&player=<token>&cell=<1-(size*size)>`
 - `POST /api/leave`: removes the player from one room
 
@@ -64,9 +64,10 @@ If you are testing from another device on the same network, replace `localhost` 
 
 ## How to Play
 
-- Enter the same room code in two tabs or two browsers.
+- Enter the same 5-digit room code in two tabs or two browsers.
 - Enter a custom username before joining.
-- The first player can choose the board size from `3x3` up to `8x8` when creating the room.
+- The host can choose the board size from `3x3` up to `8x8`.
+- The default winning length is `3`, and the host can increase it up to the current board size.
 - Click `Join Room` in each browser session.
 - The first player in that room becomes `X`, the second becomes `O`.
 - Click an empty square when it is your turn.
