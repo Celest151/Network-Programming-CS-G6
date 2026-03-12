@@ -62,44 +62,6 @@ http://localhost:8784/
 
 If you are testing from another device on the same network, replace `localhost` with the server machine's IP address.
 
-## Player Guide
-
-### Quick Start
-
-1. Start the server with `./server 8784`.
-2. Open `http://localhost:8784/` in a browser.
-3. Open the same URL in a second tab, another browser, or another device.
-
-### Creating a Room
-
-1. Enter a username.
-2. Enter a 5-digit room code, or click `Generate`.
-3. Choose the board size.
-4. Choose the win length.
-5. Click `Join Room`.
-
-The first player to join becomes the host for the room settings. If the room is not full yet, joining again with different size or win-length settings will update that room before the second player locks it in.
-
-### Joining an Existing Room
-
-1. Enter a username.
-2. Enter the same 5-digit room code as the other player.
-3. Click `Join Room`.
-
-The first player in that room becomes `X`, and the second player becomes `O`.
-
-### During the Match
-
-1. Wait until both players have joined.
-2. Watch the status badge to see whose turn it is.
-3. Click an empty cell to place your mark.
-4. Continue until one player connects the required number of marks, or the board fills and ends in a draw.
-
-### Leaving a Room
-
-1. Click `Leave Room` to exit manually.
-2. Closing the tab also removes the player session after disconnect handling runs.
-
 ## How to Play
 
 - Enter the same 5-digit room code in two tabs or two browsers.
