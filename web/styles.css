@@ -59,7 +59,8 @@ body::before {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -112,6 +113,11 @@ h2 {
   border: 1px solid var(--line);
   cursor: pointer;
   transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.small {
+  min-width: 112px;
+  padding: 14px 16px;
 }
 
 .theme-toggle,
@@ -213,6 +219,13 @@ h2 {
   gap: 8px;
 }
 
+.inline-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
 .field span {
   color: var(--muted);
   font-size: 0.95rem;
@@ -236,6 +249,12 @@ h2 {
   padding: 14px 16px;
   background: var(--panel-strong);
   color: var(--text);
+}
+
+.player-name {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.98rem;
 }
 
 .field input:focus,

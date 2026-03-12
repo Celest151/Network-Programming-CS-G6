@@ -1,10 +1,13 @@
 const boardEl = document.getElementById("board");
 const joinBtn = document.getElementById("joinBtn");
 const leaveBtn = document.getElementById("leaveBtn");
+const generateBtn = document.getElementById("generateBtn");
+const usernameInput = document.getElementById("usernameInput");
 const roomInput = document.getElementById("roomInput");
 const sizeSelect = document.getElementById("sizeSelect");
 const roomLabelEl = document.getElementById("roomLabel");
 const playerMarkEl = document.getElementById("playerMark");
+const playerNameEl = document.getElementById("playerName");
 const statusTextEl = document.getElementById("statusText");
 const playersTextEl = document.getElementById("playersText");
 const sizeTextEl = document.getElementById("sizeText");
@@ -15,6 +18,7 @@ const themeIcon = document.getElementById("themeIcon");
 const state = {
   token: sessionStorage.getItem("ttt-player-token") || "",
   room: sessionStorage.getItem("ttt-room-code") || "",
+  username: sessionStorage.getItem("ttt-username") || "",
   boardSize: Number(sessionStorage.getItem("ttt-board-size") || "3"),
   canMove: false,
   polling: null,
@@ -22,7 +26,19 @@ const state = {
 };
 
 function normalizeRoom(value) {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
+  return value.replace(/\D/g, "").slice(0, 5);
+}
+
+function generateRoomCode() {
+  let code = "";
+  for (let i = 0; i < 5; i += 1) {
+    code += Math.floor(Math.random() * 10);
+  }
+  return code;
+}
+
+function normalizeUsername(value) {
+  return value.replace(/[^\w\s-]/g, "").trim().slice(0, 20);
 }
 
 function createBoard(size) {
@@ -40,9 +56,10 @@ function createBoard(size) {
   }
 }
 
-function saveSession(token, room, boardSize = state.boardSize) {
+function saveSession(token, room, boardSize = state.boardSize, username = state.username) {
   state.token = token || "";
   state.room = room || "";
+  state.username = username || "";
   state.boardSize = boardSize;
 
   if (state.token) {
@@ -55,6 +72,12 @@ function saveSession(token, room, boardSize = state.boardSize) {
     sessionStorage.setItem("ttt-room-code", state.room);
   } else {
     sessionStorage.removeItem("ttt-room-code");
+  }
+
+  if (state.username) {
+    sessionStorage.setItem("ttt-username", state.username);
+  } else {
+    sessionStorage.removeItem("ttt-username");
   }
 
   sessionStorage.setItem("ttt-board-size", String(state.boardSize));
@@ -86,8 +109,10 @@ async function api(path, options = {}) {
 function setJoinedState(joined) {
   joinBtn.disabled = joined;
   leaveBtn.disabled = !joined;
+  usernameInput.disabled = joined;
   roomInput.disabled = joined;
   sizeSelect.disabled = joined;
+  generateBtn.disabled = joined;
 }
 
 function renderBoard(board, canMove) {
@@ -108,6 +133,7 @@ function resetView() {
   createBoard(state.boardSize);
   renderBoard("_".repeat(state.boardSize * state.boardSize), false);
   playerMarkEl.textContent = "Not joined";
+  playerNameEl.textContent = state.username || "Guest";
   playersTextEl.textContent = "0 / 2";
   sizeTextEl.textContent = `${state.boardSize} x ${state.boardSize}`;
   turnBadgeEl.textContent = "Idle";
@@ -122,6 +148,7 @@ function updateUi(snapshot) {
   renderBoard(snapshot.board, state.canMove);
   roomLabelEl.textContent = snapshot.room;
   playerMarkEl.textContent = snapshot.role === "player" ? `Player ${snapshot.yourMark}` : "Spectator";
+  playerNameEl.textContent = snapshot.role === "player" ? snapshot.yourName : (state.username || "Guest");
   playersTextEl.textContent = `${snapshot.playersConnected} / 2`;
   statusTextEl.textContent = snapshot.status;
   sizeTextEl.textContent = `${snapshot.boardSize} x ${snapshot.boardSize}`;
@@ -141,16 +168,23 @@ function updateUi(snapshot) {
 
 async function joinRoom() {
   const desiredRoom = normalizeRoom(roomInput.value || state.room);
+  const desiredUsername = normalizeUsername(usernameInput.value || state.username);
   roomInput.value = desiredRoom;
+  usernameInput.value = desiredUsername;
 
   if (desiredRoom.length < 3) {
-    statusTextEl.textContent = "Use a room code with at least 3 letters or numbers.";
+    statusTextEl.textContent = "Use a 5-digit room code.";
+    return;
+  }
+
+  if (desiredUsername.length < 2) {
+    statusTextEl.textContent = "Use a username with at least 2 characters.";
     return;
   }
 
   try {
     const requestedSize = String(Number(sizeSelect.value || state.boardSize || 3));
-    const body = new URLSearchParams({ room: desiredRoom, size: requestedSize });
+    const body = new URLSearchParams({ room: desiredRoom, size: requestedSize, username: desiredUsername });
     if (state.token) {
       body.set("token", state.token);
     }
@@ -159,8 +193,9 @@ async function joinRoom() {
       body
     });
 
-    saveSession(data.token, data.room, Number(data.boardSize || requestedSize));
+    saveSession(data.token, data.room, Number(data.boardSize || requestedSize), data.username || desiredUsername);
     roomInput.value = data.room;
+    usernameInput.value = state.username;
     sizeSelect.value = String(state.boardSize);
     statusTextEl.textContent = data.message;
     setJoinedState(true);
@@ -187,9 +222,10 @@ async function leaveRoom() {
   } catch (error) {
     statusTextEl.textContent = error.message;
   } finally {
-    saveSession("", state.room);
+    saveSession("", state.room, state.boardSize, state.username);
     setJoinedState(false);
     playerMarkEl.textContent = "Not joined";
+    playerNameEl.textContent = state.username || "Guest";
     sizeSelect.value = String(state.boardSize);
   }
 }
@@ -211,6 +247,7 @@ async function refreshState() {
     setJoinedState(false);
     if (error.message.includes("does not exist")) {
       saveSession("", "");
+      usernameInput.value = state.username;
       roomInput.value = "";
       sizeSelect.value = String(state.boardSize);
       roomLabelEl.textContent = "None";
@@ -254,8 +291,16 @@ window.addEventListener("beforeunload", () => {
   navigator.sendBeacon("/api/leave", body);
 });
 
+usernameInput.addEventListener("input", () => {
+  usernameInput.value = normalizeUsername(usernameInput.value);
+});
+
 roomInput.addEventListener("input", () => {
   roomInput.value = normalizeRoom(roomInput.value);
+});
+
+generateBtn.addEventListener("click", () => {
+  roomInput.value = generateRoomCode();
 });
 
 roomInput.addEventListener("keydown", (event) => {
@@ -273,6 +318,7 @@ themeBtn.addEventListener("click", () => {
 
 createBoard(state.boardSize);
 applyTheme(state.theme);
+usernameInput.value = state.username;
 roomInput.value = state.room;
 sizeSelect.value = String(state.boardSize);
 resetView();

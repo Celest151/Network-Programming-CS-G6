@@ -65,6 +65,7 @@ If you are testing from another device on the same network, replace `localhost` 
 ## How to Play
 
 - Enter the same room code in two tabs or two browsers.
+- Enter a custom username before joining.
 - The first player can choose the board size from `3x3` up to `8x8` when creating the room.
 - Click `Join Room` in each browser session.
 - The first player in that room becomes `X`, the second becomes `O`.

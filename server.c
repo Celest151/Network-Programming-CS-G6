@@ -23,6 +23,7 @@
 #define REQUEST_BUF_SIZE 8192
 #define TOKEN_SIZE 40
 #define ROOM_CODE_SIZE 16
+#define USERNAME_SIZE 32
 #define PLAYER_TIMEOUT 20
 #define MAX_ROOMS 64
 
@@ -30,6 +31,7 @@ typedef struct {
     int active;
     char mark;
     char token[TOKEN_SIZE];
+    char username[USERNAME_SIZE];
     time_t last_seen;
 } Player;
 
@@ -194,6 +196,7 @@ static void clear_player(Room *room, int slot) {
 
     room->players[slot].active = 0;
     room->players[slot].token[0] = '\0';
+    room->players[slot].username[0] = '\0';
     room->players[slot].last_seen = 0;
 }
 
@@ -258,6 +261,40 @@ static int parse_board_size(const char *input) {
     return (int)value;
 }
 
+static int normalize_username(const char *input, char *out, size_t out_size) {
+    size_t used = 0;
+
+    if (out_size == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+
+    if (input == NULL) {
+        return 0;
+    }
+
+    while (*input != '\0' && isspace((unsigned char)*input)) {
+        input++;
+    }
+
+    for (; *input != '\0'; ++input) {
+        unsigned char ch = (unsigned char)*input;
+        if (isalnum(ch) || ch == '_' || ch == '-' || ch == ' ') {
+            if (used + 1 >= out_size) {
+                break;
+            }
+            out[used++] = (char)ch;
+        }
+    }
+
+    while (used > 0 && isspace((unsigned char)out[used - 1])) {
+        used--;
+    }
+    out[used] = '\0';
+
+    return used >= 2;
+}
+
 static int normalize_room_code(const char *input, char *out, size_t out_size) {
     size_t used = 0;
 
@@ -272,18 +309,18 @@ static int normalize_room_code(const char *input, char *out, size_t out_size) {
 
     for (; *input != '\0'; ++input) {
         unsigned char ch = (unsigned char)*input;
-        if (isalnum(ch)) {
+        if (isdigit(ch)) {
             if (used + 1 >= out_size) {
                 return 0;
             }
-            out[used++] = (char)toupper(ch);
-        } else if (!isspace(ch) && ch != '-' && ch != '_') {
+            out[used++] = (char)ch;
+        } else if (!isspace(ch)) {
             return 0;
         }
     }
 
     out[used] = '\0';
-    return used >= 3;
+    return used == 5;
 }
 
 static int find_player_in_room(Room *room, const char *token) {
@@ -563,6 +600,9 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
     char board[MAX_BOARD_CELLS + 1];
     const char *role = "spectator";
     char your_mark = '-';
+    const char *your_name = "";
+    const char *player_x_name = room->players[0].username[0] ? room->players[0].username : "Waiting";
+    const char *player_o_name = room->players[1].username[0] ? room->players[1].username : "Waiting";
     int can_move = 0;
 
     board_to_wire(room, board, sizeof(board));
@@ -570,6 +610,7 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
     if (player_index >= 0) {
         role = "player";
         your_mark = room->players[player_index].mark;
+        your_name = room->players[player_index].username;
         if (room->game_started &&
             !room->winner &&
             !room->draw &&
@@ -592,6 +633,9 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
              "\"status\":\"%s\","
              "\"role\":\"%s\","
              "\"yourMark\":\"%c\","
+             "\"yourName\":\"%s\","
+             "\"playerXName\":\"%s\","
+             "\"playerOName\":\"%s\","
              "\"canMove\":%s,"
              "\"playersConnected\":%d"
              "}",
@@ -605,6 +649,9 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
              room->status,
              role,
              your_mark,
+             your_name,
+             player_x_name,
+             player_o_name,
              can_move ? "true" : "false",
              room_player_count(room));
 }
@@ -613,6 +660,8 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
     char requested_room[ROOM_CODE_SIZE];
     char normalized_room[ROOM_CODE_SIZE];
     char token[TOKEN_SIZE];
+    char username[USERNAME_SIZE];
+    char normalized_username[USERNAME_SIZE];
     char size_text[16];
     char body[512];
     Room *room;
@@ -621,12 +670,20 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
 
     query_param(request->body, "room", requested_room, sizeof(requested_room));
     query_param(request->body, "token", token, sizeof(token));
+    query_param(request->body, "username", username, sizeof(username));
     query_param(request->body, "size", size_text, sizeof(size_text));
 
     if (!normalize_room_code(requested_room, normalized_room, sizeof(normalized_room))) {
         respond_json(client_fd,
                      "400 Bad Request",
-                     "{\"ok\":false,\"error\":\"bad_room\",\"message\":\"Use a room code with 3 to 12 letters or numbers.\"}");
+                     "{\"ok\":false,\"error\":\"bad_room\",\"message\":\"Use a 5-digit room code.\"}");
+        return;
+    }
+
+    if (!normalize_username(username, normalized_username, sizeof(normalized_username))) {
+        respond_json(client_fd,
+                     "400 Bad Request",
+                     "{\"ok\":false,\"error\":\"bad_username\",\"message\":\"Use a username with at least 2 characters.\"}");
         return;
     }
 
@@ -666,10 +723,12 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
 
         room->players[slot].active = 1;
         room->players[slot].mark = (slot == 0) ? 'X' : 'O';
+        snprintf(room->players[slot].username, sizeof(room->players[slot].username), "%s", normalized_username);
         room->players[slot].last_seen = time(NULL);
         generate_token(server, room, slot);
         maybe_start_game(room);
     } else {
+        snprintf(room->players[slot].username, sizeof(room->players[slot].username), "%s", normalized_username);
         room->players[slot].last_seen = time(NULL);
     }
 
@@ -681,12 +740,15 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
              "\"boardSize\":%d,"
              "\"token\":\"%s\","
              "\"mark\":\"%c\","
-             "\"message\":\"Joined room %s as Player %c.\""
+             "\"username\":\"%s\","
+             "\"message\":\"%s joined room %s as Player %c.\""
              "}",
              room->code,
              room->board_size,
              room->players[slot].token,
              room->players[slot].mark,
+             room->players[slot].username,
+             room->players[slot].username,
              room->code,
              room->players[slot].mark);
     respond_json(client_fd, "200 OK", body);
