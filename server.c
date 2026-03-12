@@ -20,8 +20,10 @@
 #define BACKLOG 8
 #define BOARD_CELLS 9
 #define REQUEST_BUF_SIZE 8192
-#define TOKEN_SIZE 32
+#define TOKEN_SIZE 40
+#define ROOM_CODE_SIZE 16
 #define PLAYER_TIMEOUT 20
+#define MAX_ROOMS 64
 
 typedef struct {
     int active;
@@ -31,6 +33,8 @@ typedef struct {
 } Player;
 
 typedef struct {
+    int in_use;
+    char code[ROOM_CODE_SIZE];
     char board[BOARD_CELLS];
     Player players[2];
     int current_turn;
@@ -39,44 +43,21 @@ typedef struct {
     int winner;
     int draw;
     char status[128];
+} Room;
+
+typedef struct {
+    Room rooms[MAX_ROOMS];
     unsigned int token_seed;
-} GameState;
+} ServerState;
 
 typedef struct {
     char method[8];
     char path[256];
-    char query[256];
+    char query[512];
     char content_type[64];
     char body[2048];
     int content_length;
 } HttpRequest;
-
-static void reset_board(GameState *game) {
-    for (int i = 0; i < BOARD_CELLS; ++i) {
-        game->board[i] = ' ';
-    }
-    game->current_turn = 0;
-    game->move_count = 0;
-    game->game_started = 0;
-    game->winner = 0;
-    game->draw = 0;
-}
-
-static void set_status(GameState *game, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(game->status, sizeof(game->status), fmt, args);
-    va_end(args);
-}
-
-static void init_game(GameState *game) {
-    memset(game, 0, sizeof(*game));
-    game->players[0].mark = 'X';
-    game->players[1].mark = 'O';
-    game->token_seed = 1U;
-    reset_board(game);
-    set_status(game, "Waiting for Player X and Player O.");
-}
 
 static int send_all(int fd, const void *buf, size_t len) {
     const char *ptr = (const char *)buf;
@@ -118,97 +99,156 @@ static int check_winner(const char board[BOARD_CELLS]) {
     return 0;
 }
 
-static void board_to_wire(const GameState *game, char out[BOARD_CELLS + 1]) {
+static void set_status(Room *room, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(room->status, sizeof(room->status), fmt, args);
+    va_end(args);
+}
+
+static void reset_board(Room *room) {
     for (int i = 0; i < BOARD_CELLS; ++i) {
-        out[i] = (game->board[i] == ' ') ? '_' : game->board[i];
+        room->board[i] = ' ';
+    }
+    room->current_turn = 0;
+    room->move_count = 0;
+    room->game_started = 0;
+    room->winner = 0;
+    room->draw = 0;
+}
+
+static void init_room(Room *room, const char *code) {
+    memset(room, 0, sizeof(*room));
+    room->in_use = 1;
+    snprintf(room->code, sizeof(room->code), "%s", code);
+    room->players[0].mark = 'X';
+    room->players[1].mark = 'O';
+    reset_board(room);
+    set_status(room, "Room %s is waiting for players.", room->code);
+}
+
+static void init_server(ServerState *server) {
+    memset(server, 0, sizeof(*server));
+    server->token_seed = 1U;
+}
+
+static void board_to_wire(const Room *room, char out[BOARD_CELLS + 1]) {
+    for (int i = 0; i < BOARD_CELLS; ++i) {
+        out[i] = (room->board[i] == ' ') ? '_' : room->board[i];
     }
     out[BOARD_CELLS] = '\0';
 }
 
-static void generate_token(GameState *game, int slot) {
-    snprintf(game->players[slot].token,
-             sizeof(game->players[slot].token),
-             "%c-%u-%ld",
-             game->players[slot].mark,
-             game->token_seed++,
+static void generate_token(ServerState *server, Room *room, int slot) {
+    snprintf(room->players[slot].token,
+             sizeof(room->players[slot].token),
+             "%s-%c-%u-%ld",
+             room->code,
+             room->players[slot].mark,
+             server->token_seed++,
              (long)time(NULL));
 }
 
-static int find_player_by_token(GameState *game, const char *token) {
-    if (token == NULL || token[0] == '\0') {
-        return -1;
-    }
-
-    for (int i = 0; i < 2; ++i) {
-        if (game->players[i].active && strcmp(game->players[i].token, token) == 0) {
-            return i;
-        }
-    }
-
-    return -1;
+static int room_player_count(const Room *room) {
+    return room->players[0].active + room->players[1].active;
 }
 
-static void clear_player(GameState *game, int slot) {
+static int room_is_empty(const Room *room) {
+    return room_player_count(room) == 0;
+}
+
+static void clear_player(Room *room, int slot) {
     if (slot < 0 || slot > 1) {
         return;
     }
 
-    game->players[slot].active = 0;
-    game->players[slot].token[0] = '\0';
-    game->players[slot].last_seen = 0;
+    room->players[slot].active = 0;
+    room->players[slot].token[0] = '\0';
+    room->players[slot].last_seen = 0;
 }
 
-static void reset_after_disconnect(GameState *game, char missing_mark) {
-    reset_board(game);
-    if (game->players[0].active && game->players[1].active) {
-        set_status(game, "Both players connected. Game ready.");
-    } else if (game->players[0].active || game->players[1].active) {
-        set_status(game, "Player %c left. Waiting for another player.", missing_mark);
+static void release_room(Room *room) {
+    memset(room, 0, sizeof(*room));
+}
+
+static void room_waiting_status(Room *room, char missing_mark) {
+    reset_board(room);
+    if (room->players[0].active || room->players[1].active) {
+        set_status(room, "Player %c left room %s. Waiting for another player.", missing_mark, room->code);
     } else {
-        set_status(game, "Waiting for Player X and Player O.");
+        set_status(room, "Room %s is empty.", room->code);
     }
 }
 
-static void maybe_start_game(GameState *game) {
-    if (game->players[0].active && game->players[1].active) {
-        reset_board(game);
-        game->game_started = 1;
-        set_status(game, "Game started. Player X moves first.");
-    } else if (game->players[0].active || game->players[1].active) {
-        set_status(game, "Waiting for a second player.");
+static void maybe_start_game(Room *room) {
+    if (room->players[0].active && room->players[1].active) {
+        reset_board(room);
+        room->game_started = 1;
+        set_status(room, "Room %s started. Player X moves first.", room->code);
     } else {
-        set_status(game, "Waiting for Player X and Player O.");
+        set_status(room, "Room %s is waiting for another player.", room->code);
     }
 }
 
-static void cleanup_inactive_players(GameState *game) {
-    time_t now = time(NULL);
+static Room *find_room(ServerState *server, const char *code) {
+    if (code == NULL || code[0] == '\0') {
+        return NULL;
+    }
 
-    for (int i = 0; i < 2; ++i) {
-        if (!game->players[i].active) {
-            continue;
-        }
-        if ((now - game->players[i].last_seen) > PLAYER_TIMEOUT) {
-            char mark = game->players[i].mark;
-            clear_player(game, i);
-            reset_after_disconnect(game, mark);
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        if (server->rooms[i].in_use && strcmp(server->rooms[i].code, code) == 0) {
+            return &server->rooms[i];
         }
     }
+
+    return NULL;
 }
 
-static int assign_player(GameState *game, const char *token) {
-    int existing = find_player_by_token(game, token);
-    if (existing >= 0) {
-        game->players[existing].last_seen = time(NULL);
-        return existing;
+static Room *create_room(ServerState *server, const char *code) {
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        if (!server->rooms[i].in_use) {
+            init_room(&server->rooms[i], code);
+            return &server->rooms[i];
+        }
+    }
+    return NULL;
+}
+
+static int normalize_room_code(const char *input, char *out, size_t out_size) {
+    size_t used = 0;
+
+    if (out_size == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+
+    if (input == NULL) {
+        return 0;
+    }
+
+    for (; *input != '\0'; ++input) {
+        unsigned char ch = (unsigned char)*input;
+        if (isalnum(ch)) {
+            if (used + 1 >= out_size) {
+                return 0;
+            }
+            out[used++] = (char)toupper(ch);
+        } else if (!isspace(ch) && ch != '-' && ch != '_') {
+            return 0;
+        }
+    }
+
+    out[used] = '\0';
+    return used >= 3;
+}
+
+static int find_player_in_room(Room *room, const char *token) {
+    if (room == NULL || token == NULL || token[0] == '\0') {
+        return -1;
     }
 
     for (int i = 0; i < 2; ++i) {
-        if (!game->players[i].active) {
-            game->players[i].active = 1;
-            generate_token(game, i);
-            game->players[i].last_seen = time(NULL);
-            maybe_start_game(game);
+        if (room->players[i].active && strcmp(room->players[i].token, token) == 0) {
             return i;
         }
     }
@@ -216,14 +256,56 @@ static int assign_player(GameState *game, const char *token) {
     return -1;
 }
 
-static void leave_player(GameState *game, int slot) {
-    if (slot < 0) {
-        return;
+static Room *find_room_by_token(ServerState *server, const char *token, int *slot_out) {
+    if (slot_out != NULL) {
+        *slot_out = -1;
     }
 
-    char mark = game->players[slot].mark;
-    clear_player(game, slot);
-    reset_after_disconnect(game, mark);
+    if (token == NULL || token[0] == '\0') {
+        return NULL;
+    }
+
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        Room *room = &server->rooms[i];
+        if (!room->in_use) {
+            continue;
+        }
+        int slot = find_player_in_room(room, token);
+        if (slot >= 0) {
+            if (slot_out != NULL) {
+                *slot_out = slot;
+            }
+            return room;
+        }
+    }
+
+    return NULL;
+}
+
+static void cleanup_inactive_rooms(ServerState *server) {
+    time_t now = time(NULL);
+
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        Room *room = &server->rooms[i];
+        if (!room->in_use) {
+            continue;
+        }
+
+        for (int slot = 0; slot < 2; ++slot) {
+            if (!room->players[slot].active) {
+                continue;
+            }
+            if ((now - room->players[slot].last_seen) > PLAYER_TIMEOUT) {
+                char mark = room->players[slot].mark;
+                clear_player(room, slot);
+                room_waiting_status(room, mark);
+            }
+        }
+
+        if (room_is_empty(room)) {
+            release_room(room);
+        }
+    }
 }
 
 static const char *query_param(const char *source, const char *key, char *out, size_t out_size) {
@@ -238,11 +320,12 @@ static const char *query_param(const char *source, const char *key, char *out, s
     while (cursor != NULL && *cursor != '\0') {
         const char *eq = strchr(cursor, '=');
         const char *amp = strchr(cursor, '&');
-        size_t name_len = 0;
+        size_t name_len;
 
         if (eq == NULL) {
             break;
         }
+
         name_len = (size_t)(eq - cursor);
         if (name_len == key_len && strncmp(cursor, key, key_len) == 0) {
             const char *value = eq + 1;
@@ -307,9 +390,6 @@ static int read_http_request(int client_fd, HttpRequest *request) {
     }
     snprintf(request->path, sizeof(request->path), "%s", target);
 
-    request->content_length = 0;
-    request->content_type[0] = '\0';
-
     char *headers = line_end + 2;
     char *cursor = headers;
     while (cursor < header_end) {
@@ -335,10 +415,7 @@ static int read_http_request(int client_fd, HttpRequest *request) {
     if (request->content_length > 0) {
         size_t body_bytes = total - header_len;
         while (body_bytes < (size_t)request->content_length) {
-            rc = recv(client_fd,
-                      buffer + total,
-                      sizeof(buffer) - 1 - total,
-                      0);
+            rc = recv(client_fd, buffer + total, sizeof(buffer) - 1 - total, 0);
             if (rc < 0) {
                 if (errno == EINTR) {
                     continue;
@@ -364,10 +441,7 @@ static int read_http_request(int client_fd, HttpRequest *request) {
     return 0;
 }
 
-static int respond(int client_fd,
-                   const char *status,
-                   const char *content_type,
-                   const char *body) {
+static int respond(int client_fd, const char *status, const char *content_type, const char *body) {
     char header[512];
     size_t body_len = strlen(body);
 
@@ -467,21 +541,21 @@ static int respond_file(int client_fd, const char *path, const char *content_typ
     return 0;
 }
 
-static void write_state_json(GameState *game, int player_index, char *out, size_t out_size) {
+static void write_room_state_json(Room *room, int player_index, char *out, size_t out_size) {
     char board[BOARD_CELLS + 1];
     const char *role = "spectator";
     char your_mark = '-';
     int can_move = 0;
 
-    board_to_wire(game, board);
+    board_to_wire(room, board);
 
     if (player_index >= 0) {
         role = "player";
-        your_mark = game->players[player_index].mark;
-        if (game->game_started &&
-            !game->winner &&
-            !game->draw &&
-            game->current_turn == player_index) {
+        your_mark = room->players[player_index].mark;
+        if (room->game_started &&
+            !room->winner &&
+            !room->draw &&
+            room->current_turn == player_index) {
             can_move = 1;
         }
     }
@@ -489,6 +563,8 @@ static void write_state_json(GameState *game, int player_index, char *out, size_
     snprintf(out,
              out_size,
              "{"
+             "\"ok\":true,"
+             "\"room\":\"%s\","
              "\"board\":\"%s\","
              "\"gameStarted\":%s,"
              "\"winner\":\"%c\","
@@ -500,101 +576,173 @@ static void write_state_json(GameState *game, int player_index, char *out, size_
              "\"canMove\":%s,"
              "\"playersConnected\":%d"
              "}",
+             room->code,
              board,
-             game->game_started ? "true" : "false",
-             game->winner ? game->winner : '-',
-             game->draw ? "true" : "false",
-             game->players[game->current_turn].mark,
-             game->status,
+             room->game_started ? "true" : "false",
+             room->winner ? room->winner : '-',
+             room->draw ? "true" : "false",
+             room->players[room->current_turn].mark,
+             room->status,
              role,
              your_mark,
              can_move ? "true" : "false",
-             game->players[0].active + game->players[1].active);
+             room_player_count(room));
 }
 
-static void handle_join(GameState *game, int client_fd, const HttpRequest *request) {
+static void handle_join(ServerState *server, int client_fd, const HttpRequest *request) {
+    char requested_room[ROOM_CODE_SIZE];
+    char normalized_room[ROOM_CODE_SIZE];
     char token[TOKEN_SIZE];
     char body[512];
+    Room *room;
+    int slot;
+
+    query_param(request->body, "room", requested_room, sizeof(requested_room));
     query_param(request->body, "token", token, sizeof(token));
 
-    int slot = assign_player(game, token);
-    if (slot < 0) {
+    if (!normalize_room_code(requested_room, normalized_room, sizeof(normalized_room))) {
         respond_json(client_fd,
-                     "409 Conflict",
-                     "{\"ok\":false,\"error\":\"server_full\",\"message\":\"Two players are already in the game.\"}");
+                     "400 Bad Request",
+                     "{\"ok\":false,\"error\":\"bad_room\",\"message\":\"Use a room code with 3 to 12 letters or numbers.\"}");
         return;
+    }
+
+    room = find_room(server, normalized_room);
+    if (room == NULL) {
+        room = create_room(server, normalized_room);
+    }
+    if (room == NULL) {
+        respond_json(client_fd,
+                     "503 Service Unavailable",
+                     "{\"ok\":false,\"error\":\"room_limit\",\"message\":\"The server cannot create more rooms right now.\"}");
+        return;
+    }
+
+    slot = find_player_in_room(room, token);
+    if (slot < 0) {
+        slot = room->players[0].active ? (room->players[1].active ? -1 : 1) : 0;
+        if (slot < 0) {
+            respond_json(client_fd,
+                         "409 Conflict",
+                         "{\"ok\":false,\"error\":\"room_full\",\"message\":\"This room already has two players.\"}");
+            return;
+        }
+
+        room->players[slot].active = 1;
+        room->players[slot].mark = (slot == 0) ? 'X' : 'O';
+        room->players[slot].last_seen = time(NULL);
+        generate_token(server, room, slot);
+        maybe_start_game(room);
+    } else {
+        room->players[slot].last_seen = time(NULL);
     }
 
     snprintf(body,
              sizeof(body),
              "{"
              "\"ok\":true,"
+             "\"room\":\"%s\","
              "\"token\":\"%s\","
              "\"mark\":\"%c\","
-             "\"message\":\"Joined as Player %c.\""
+             "\"message\":\"Joined room %s as Player %c.\""
              "}",
-             game->players[slot].token,
-             game->players[slot].mark,
-             game->players[slot].mark);
+             room->code,
+             room->players[slot].token,
+             room->players[slot].mark,
+             room->code,
+             room->players[slot].mark);
     respond_json(client_fd, "200 OK", body);
 }
 
-static void handle_state(GameState *game, int client_fd, const HttpRequest *request) {
+static void handle_state(ServerState *server, int client_fd, const HttpRequest *request) {
+    char room_code[ROOM_CODE_SIZE];
+    char normalized_room[ROOM_CODE_SIZE];
     char token[TOKEN_SIZE];
     char body[512];
+    Room *room;
+    int slot = -1;
+
+    query_param(request->query, "room", room_code, sizeof(room_code));
     query_param(request->query, "player", token, sizeof(token));
 
-    int player_index = find_player_by_token(game, token);
-    if (player_index >= 0) {
-        game->players[player_index].last_seen = time(NULL);
+    if (!normalize_room_code(room_code, normalized_room, sizeof(normalized_room))) {
+        respond_json(client_fd,
+                     "404 Not Found",
+                     "{\"ok\":false,\"error\":\"missing_room\",\"message\":\"Choose a room code first.\"}");
+        return;
     }
 
-    write_state_json(game, player_index, body, sizeof(body));
+    room = find_room(server, normalized_room);
+    if (room == NULL) {
+        respond_json(client_fd,
+                     "404 Not Found",
+                     "{\"ok\":false,\"error\":\"room_not_found\",\"message\":\"That room does not exist yet.\"}");
+        return;
+    }
+
+    slot = find_player_in_room(room, token);
+    if (slot >= 0) {
+        room->players[slot].last_seen = time(NULL);
+    }
+
+    write_room_state_json(room, slot, body, sizeof(body));
     respond_json(client_fd, "200 OK", body);
 }
 
-static void handle_move(GameState *game, int client_fd, const HttpRequest *request) {
+static void handle_move(ServerState *server, int client_fd, const HttpRequest *request) {
+    char room_code[ROOM_CODE_SIZE];
+    char normalized_room[ROOM_CODE_SIZE];
     char token[TOKEN_SIZE];
-    char cell_value[16];
-    char body[512];
+    char cell_text[16];
+    Room *room;
     int slot;
     long cell;
 
+    (void)server;
+    query_param(request->body, "room", room_code, sizeof(room_code));
     query_param(request->body, "player", token, sizeof(token));
-    query_param(request->body, "cell", cell_value, sizeof(cell_value));
+    query_param(request->body, "cell", cell_text, sizeof(cell_text));
 
-    slot = find_player_by_token(game, token);
+    if (!normalize_room_code(room_code, normalized_room, sizeof(normalized_room))) {
+        respond_json(client_fd,
+                     "400 Bad Request",
+                     "{\"ok\":false,\"error\":\"bad_room\",\"message\":\"Choose a valid room code first.\"}");
+        return;
+    }
+
+    room = find_room(server, normalized_room);
+    if (room == NULL) {
+        respond_json(client_fd,
+                     "404 Not Found",
+                     "{\"ok\":false,\"error\":\"room_not_found\",\"message\":\"That room does not exist.\"}");
+        return;
+    }
+
+    slot = find_player_in_room(room, token);
     if (slot < 0) {
         respond_json(client_fd,
                      "403 Forbidden",
-                     "{\"ok\":false,\"error\":\"invalid_player\",\"message\":\"Join the game before moving.\"}");
+                     "{\"ok\":false,\"error\":\"invalid_player\",\"message\":\"Join the room before moving.\"}");
         return;
     }
 
-    game->players[slot].last_seen = time(NULL);
+    room->players[slot].last_seen = time(NULL);
 
-    if (!game->game_started) {
+    if (!room->game_started) {
         respond_json(client_fd,
                      "409 Conflict",
-                     "{\"ok\":false,\"error\":\"game_not_started\",\"message\":\"Waiting for the second player.\"}");
+                     "{\"ok\":false,\"error\":\"game_not_started\",\"message\":\"Waiting for another player in this room.\"}");
         return;
     }
 
-    if (game->winner || game->draw) {
-        respond_json(client_fd,
-                     "409 Conflict",
-                     "{\"ok\":false,\"error\":\"game_finished\",\"message\":\"This round is already finished.\"}");
-        return;
-    }
-
-    if (slot != game->current_turn) {
+    if (slot != room->current_turn) {
         respond_json(client_fd,
                      "409 Conflict",
                      "{\"ok\":false,\"error\":\"not_your_turn\",\"message\":\"Wait for your turn.\"}");
         return;
     }
 
-    cell = strtol(cell_value, NULL, 10);
+    cell = strtol(cell_text, NULL, 10);
     if (cell < 1 || cell > 9) {
         respond_json(client_fd,
                      "400 Bad Request",
@@ -602,53 +750,75 @@ static void handle_move(GameState *game, int client_fd, const HttpRequest *reque
         return;
     }
 
-    if (game->board[cell - 1] != ' ') {
+    if (room->board[cell - 1] != ' ') {
         respond_json(client_fd,
                      "409 Conflict",
                      "{\"ok\":false,\"error\":\"occupied\",\"message\":\"That cell is already taken.\"}");
         return;
     }
 
-    game->board[cell - 1] = game->players[slot].mark;
-    game->move_count++;
-    game->winner = check_winner(game->board);
+    room->board[cell - 1] = room->players[slot].mark;
+    room->move_count++;
+    room->winner = check_winner(room->board);
 
-    if (game->winner) {
-        game->game_started = 0;
-        set_status(game, "Player %c wins the round.", game->winner);
-    } else if (game->move_count == BOARD_CELLS) {
-        game->draw = 1;
-        game->game_started = 0;
-        set_status(game, "The round ended in a draw.");
+    if (room->winner) {
+        room->game_started = 0;
+        set_status(room, "Player %c won room %s.", room->winner, room->code);
+    } else if (room->move_count == BOARD_CELLS) {
+        room->draw = 1;
+        room->game_started = 0;
+        set_status(room, "Room %s ended in a draw.", room->code);
     } else {
-        game->current_turn = 1 - game->current_turn;
-        set_status(game, "Player %c to move.", game->players[game->current_turn].mark);
-    }
-
-    snprintf(body,
-             sizeof(body),
-             "{"
-             "\"ok\":true,"
-             "\"message\":\"Move accepted.\""
-             "}");
-    respond_json(client_fd, "200 OK", body);
-}
-
-static void handle_leave(GameState *game, int client_fd, const HttpRequest *request) {
-    char token[TOKEN_SIZE];
-    query_param(request->body, "player", token, sizeof(token));
-
-    int slot = find_player_by_token(game, token);
-    if (slot >= 0) {
-        leave_player(game, slot);
+        room->current_turn = 1 - room->current_turn;
+        set_status(room, "Room %s: Player %c to move.", room->code, room->players[room->current_turn].mark);
     }
 
     respond_json(client_fd,
                  "200 OK",
-                 "{\"ok\":true,\"message\":\"You left the game.\"}");
+                 "{\"ok\":true,\"message\":\"Move accepted.\"}");
 }
 
-static void handle_request(GameState *game, int client_fd, const HttpRequest *request) {
+static void handle_leave(ServerState *server, int client_fd, const HttpRequest *request) {
+    char room_code[ROOM_CODE_SIZE];
+    char normalized_room[ROOM_CODE_SIZE];
+    char token[TOKEN_SIZE];
+    Room *room;
+    int slot;
+
+    query_param(request->body, "room", room_code, sizeof(room_code));
+    query_param(request->body, "player", token, sizeof(token));
+
+    if (!normalize_room_code(room_code, normalized_room, sizeof(normalized_room))) {
+        respond_json(client_fd,
+                     "200 OK",
+                     "{\"ok\":true,\"message\":\"Nothing to leave.\"}");
+        return;
+    }
+
+    room = find_room(server, normalized_room);
+    if (room == NULL) {
+        respond_json(client_fd,
+                     "200 OK",
+                     "{\"ok\":true,\"message\":\"Room already closed.\"}");
+        return;
+    }
+
+    slot = find_player_in_room(room, token);
+    if (slot >= 0) {
+        char mark = room->players[slot].mark;
+        clear_player(room, slot);
+        room_waiting_status(room, mark);
+        if (room_is_empty(room)) {
+            release_room(room);
+        }
+    }
+
+    respond_json(client_fd,
+                 "200 OK",
+                 "{\"ok\":true,\"message\":\"You left the room.\"}");
+}
+
+static void handle_request(ServerState *server, int client_fd, const HttpRequest *request) {
     if (strcmp(request->method, "GET") == 0 && strcmp(request->path, "/") == 0) {
         respond_file(client_fd, "web/index.html", "text/html; charset=utf-8");
         return;
@@ -665,22 +835,22 @@ static void handle_request(GameState *game, int client_fd, const HttpRequest *re
     }
 
     if (strcmp(request->method, "POST") == 0 && strcmp(request->path, "/api/join") == 0) {
-        handle_join(game, client_fd, request);
+        handle_join(server, client_fd, request);
         return;
     }
 
     if (strcmp(request->method, "GET") == 0 && strcmp(request->path, "/api/state") == 0) {
-        handle_state(game, client_fd, request);
+        handle_state(server, client_fd, request);
         return;
     }
 
     if (strcmp(request->method, "POST") == 0 && strcmp(request->path, "/api/move") == 0) {
-        handle_move(game, client_fd, request);
+        handle_move(server, client_fd, request);
         return;
     }
 
     if (strcmp(request->method, "POST") == 0 && strcmp(request->path, "/api/leave") == 0) {
-        handle_leave(game, client_fd, request);
+        handle_leave(server, client_fd, request);
         return;
     }
 
@@ -734,8 +904,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    GameState game;
-    init_game(&game);
+    ServerState server;
+    init_server(&server);
 
     int listen_fd = create_server_socket(port);
     if (listen_fd < 0) {
@@ -762,7 +932,7 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        cleanup_inactive_players(&game);
+        cleanup_inactive_rooms(&server);
 
         if (ready == 0 || !FD_ISSET(listen_fd, &readfds)) {
             continue;
@@ -778,7 +948,7 @@ int main(int argc, char *argv[]) {
 
         HttpRequest request;
         if (read_http_request(client_fd, &request) == 0) {
-            handle_request(&game, client_fd, &request);
+            handle_request(&server, client_fd, &request);
         } else {
             respond_text(client_fd, "400 Bad Request", "Bad request");
         }
