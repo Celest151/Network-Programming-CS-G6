@@ -216,15 +216,3 @@ After that, players can use:
 ```text
 https://game.yourdomain.com/
 ```
-
-## How This Project Uses Course Knowledge
-
-This version still uses the course networking ideas directly:
-
-- Network concepts: the game remains client-server, with the server acting as the single source of truth.
-- Socket programming: the server uses `socket`, `setsockopt(SO_REUSEADDR)`, `bind`, `listen`, `accept`, `recv`, `send`, and `close`.
-- Message framing: HTTP request/response framing uses headers and `Content-Length`, which solves the partial-read problem on top of TCP streams.
-- Disconnect handling: browser sessions are tracked with room-specific player tokens and last-seen timestamps; inactive players are timed out and removed cleanly.
-- Asynchronous or nonblocking ideas: the browser remains responsive independently of the network, and the server uses `select()` with a timeout to combine request handling with cleanup work.
-- Multiplexing: the server waits on the listening socket and periodically handles inactive-session cleanup in the same event loop.
-- Reuse of lecture ideas: the original socket lifecycle from the sample TCP server is preserved, but the user-facing client has been upgraded from a terminal program to a web frontend.
