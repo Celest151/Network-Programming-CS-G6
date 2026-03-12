@@ -1,47 +1,42 @@
-# Tic-Tac-Toe Final Project
+# Tic-Tac-Toe Web Final Project
 
 ## Architecture Summary
 
-This project is a small TCP client-server Tic-Tac-Toe game written in POSIX C for Linux/macOS.
+This project is now a browser-based Tic-Tac-Toe game backed by a POSIX C server.
 
-- `server.c` owns the full game state: player slots, board, turns, move validation, win/draw logic, and disconnect handling.
-- `client.c` is a terminal client that connects to the server, displays game updates, and lets the user type moves.
-- `protocol.h` contains the shared application-layer protocol constants and framed `send`/`recv` helpers.
-- Both server and client use `select()` so they stay responsive without threads:
-  - the server multiplexes the listening socket plus two player sockets
-  - the client multiplexes the socket plus terminal input
+- `server.c` is an HTTP server that owns the full game state, validates all moves, assigns Player X and Player O, and handles disconnects by timing out inactive browser sessions.
+- `web/index.html`, `web/app.js`, and `web/styles.css` provide the browser UI.
+- The browser polls the server once per second for board updates, while moves are submitted with small HTTP `POST` requests.
+- The server uses `select()` around the listening socket so the design still demonstrates multiplexing and event-driven waiting without threads.
 
-TCP is used because Tic-Tac-Toe needs reliable, ordered delivery. A move or board update must not be lost or arrive out of order.
+TCP is still the transport because HTTP runs on top of TCP. Reliable, ordered delivery is required so join requests, moves, and board updates are processed consistently.
 
-## Protocol Definition
+## HTTP Protocol
 
-Each message is sent as:
+Instead of a terminal client and custom text frames, this version uses HTTP as the application-layer protocol. HTTP already provides message framing through:
 
-1. 4-byte unsigned length in network byte order
-2. ASCII payload with a single command line
+1. A request/status line
+2. Headers such as `Content-Length`
+3. A body of the declared length
 
-This framing prevents bugs caused by partial reads/writes in TCP streams.
+### Endpoints
 
-### Commands
+- `GET /`: serves the game page
+- `GET /app.js`: serves browser logic
+- `GET /styles.css`: serves page styling
+- `POST /api/join`: assigns a free player slot and returns a player token
+- `GET /api/state?player=<token>`: returns the board, turn, winner, draw flag, and status text
+- `POST /api/move`: submits `player=<token>&cell=<1-9>`
+- `POST /api/leave`: removes the player from the current game
 
-- `JOIN X` or `JOIN O`: server assigns a player mark after connection
-- `INFO waiting_for_second_player`: first player is connected, waiting
-- `START X`: game starts, `X` moves first
-- `BOARD XOX_O____`: current board, `_` means empty
-- `YOUR_TURN`: the client may send a move
-- `WAIT`: wait for the opponent
-- `MOVE 5`: client requests to place its mark in cell 5
-- `OK`: move accepted
-- `ERR reason`: invalid command or invalid move
-- `WIN X`: player `X` won
-- `DRAW`: game ended in a draw
-- `QUIT reason`: game/session ended because a player quit or disconnected
+The server is authoritative. The browser never decides whether a move is legal; it only sends requests and renders the JSON state returned by the server.
 
 ## Files
 
 - `server.c`
-- `client.c`
-- `protocol.h`
+- `web/index.html`
+- `web/app.js`
+- `web/styles.css`
 - `Makefile`
 - `README.md`
 
@@ -59,42 +54,30 @@ Start the server:
 ./server 8784
 ```
 
-Start two clients in separate terminals:
+Then open this URL in two browser tabs or on two machines:
 
-```bash
-./client 127.0.0.1 8784
+```text
+http://localhost:8784/
 ```
 
-You can also use a hostname instead of an IP address:
-
-```bash
-./client localhost 8784
-```
+If you are testing from another device on the same network, replace `localhost` with the server machine's IP address.
 
 ## How to Play
 
-- The board is shown with numbers `1` to `9` for empty cells.
-- When the server sends `YOUR_TURN`, enter a number from `1` to `9`.
-- Type `quit` to leave the session.
-
-Board positions:
-
-```text
- 1 | 2 | 3
----+---+---
- 4 | 5 | 6
----+---+---
- 7 | 8 | 9
-```
+- Open the page in two tabs.
+- Click `Join Game` in each tab.
+- The first joined player becomes `X`, the second becomes `O`.
+- Click an empty square when it is your turn.
+- Click `Leave Game` to quit the round.
 
 ## How This Project Uses Course Knowledge
 
-This project directly applies the course networking topics:
+This version still uses the course networking ideas directly:
 
-- Network concepts: it uses a clear client-server model where the server is authoritative and clients are peers only through the server.
-- Socket programming: the server performs `socket`, `setsockopt(SO_REUSEADDR)`, `bind`, `listen`, and `accept`; the client performs hostname/IP resolution and `connect`.
-- Message framing: TCP is a byte stream, so each application message is length-prefixed to handle partial `recv` and partial `send`.
-- Disconnect handling: the server detects `recv == 0` or quit messages, informs the remaining player, and closes sockets cleanly.
-- Asynchronous/nonblocking ideas: instead of blocking on one source at a time, both programs use `select()` for responsive multiplexed I/O.
-- Multiplexing: the server watches multiple sockets at once; the client watches both keyboard input and the network socket.
-- Reuse of lecture samples: the basic socket lifecycle and `SO_REUSEADDR` usage follow the sample `server.cpp` and `client.cpp`, extended into a framed multi-message protocol and a full game state machine.
+- Network concepts: the game remains client-server, with the server acting as the single source of truth.
+- Socket programming: the server uses `socket`, `setsockopt(SO_REUSEADDR)`, `bind`, `listen`, `accept`, `recv`, `send`, and `close`.
+- Message framing: HTTP request/response framing uses headers and `Content-Length`, which solves the partial-read problem on top of TCP streams.
+- Disconnect handling: browser sessions are tracked with player tokens and last-seen timestamps; inactive players are timed out and removed cleanly.
+- Asynchronous or nonblocking ideas: the browser remains responsive independently of the network, and the server uses `select()` with a timeout to combine request handling with cleanup work.
+- Multiplexing: the server waits on the listening socket and periodically handles inactive-session cleanup in the same event loop.
+- Reuse of lecture ideas: the original socket lifecycle from the sample TCP server is preserved, but the user-facing client has been upgraded from a terminal program to a web frontend.

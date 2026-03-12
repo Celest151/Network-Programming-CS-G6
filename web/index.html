@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Tic-Tac-Toe</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="panel hero">
+      <p class="eyebrow">Network Programming Final Project</p>
+      <h1>Tic-Tac-Toe Over HTTP</h1>
+      <p class="lead">
+        A small browser game with a C server that owns the board, validates every move,
+        and coordinates two remote players.
+      </p>
+      <div class="controls">
+        <button id="joinBtn" class="primary">Join Game</button>
+        <button id="leaveBtn" class="ghost" disabled>Leave Game</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel board-panel">
+        <div class="panel-header">
+          <div>
+            <p class="label">Board</p>
+            <h2>Current Round</h2>
+          </div>
+          <div class="badge" id="turnBadge">Waiting</div>
+        </div>
+        <div id="board" class="board" aria-label="tic tac toe board"></div>
+      </article>
+
+      <article class="panel sidebar">
+        <div class="stack">
+          <div>
+            <p class="label">You</p>
+            <h2 id="playerMark">Not joined</h2>
+          </div>
+          <div>
+            <p class="label">Status</p>
+            <p id="statusText" class="status-text">Open the game in two browser tabs and join with each tab.</p>
+          </div>
+          <div>
+            <p class="label">Connected Players</p>
+            <p id="playersText">0 / 2</p>
+          </div>
+          <div>
+            <p class="label">Instructions</p>
+            <p class="instructions">
+              When it is your turn, click an empty cell. The browser polls the C server for updates,
+              so both tabs stay in sync without a terminal client.
+            </p>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

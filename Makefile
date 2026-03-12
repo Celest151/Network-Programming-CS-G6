@@ -1,15 +1,12 @@
 CC = cc
 CFLAGS = -Wall -Wextra -pedantic -std=c11
 
-TARGETS = server client
+TARGETS = server
 
 all: $(TARGETS)
 
-server: server.c protocol.h
+server: server.c
 	$(CC) $(CFLAGS) -o $@ server.c
-
-client: client.c protocol.h
-	$(CC) $(CFLAGS) -o $@ client.c
 
 clean:
 	rm -f $(TARGETS)
