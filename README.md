@@ -2,10 +2,10 @@
 
 ## Architecture Summary
 
-This project is now a browser-based Tic-Tac-Toe game backed by a POSIX C server, with support for multiple custom rooms.
+This project is now a browser-based Tic-Tac-Toe game backed by a POSIX C server, with support for multiple custom rooms and host-selected board sizes.
 
 - `server.c` is an HTTP server that owns the full game state for many rooms, validates all moves, assigns Player X and Player O inside each room, and handles disconnects by timing out inactive browser sessions.
-- `web/index.html`, `web/app.js`, and `web/styles.css` provide the browser UI, room-code entry flow, and light/dark theme switcher.
+- `web/index.html`, `web/app.js`, and `web/styles.css` provide the browser UI, room-code entry flow, host-selected board sizes, and icon-based light/dark theme switcher.
 - The browser polls the server once per second for board updates, while moves are submitted with small HTTP `POST` requests.
 - The server uses `select()` around the listening socket so the design still demonstrates multiplexing and event-driven waiting without threads.
 
@@ -24,9 +24,9 @@ Instead of a terminal client and custom text frames, this version uses HTTP as t
 - `GET /`: serves the game page
 - `GET /app.js`: serves browser logic
 - `GET /styles.css`: serves page styling
-- `POST /api/join`: joins or creates a room using a custom room code and returns a player token
-- `GET /api/state?room=<code>&player=<token>`: returns the board, turn, winner, draw flag, and status text for one room
-- `POST /api/move`: submits `room=<code>&player=<token>&cell=<1-9>`
+- `POST /api/join`: joins or creates a room using a custom room code and optional `size=<3-8>` for the first player
+- `GET /api/state?room=<code>&player=<token>`: returns the board, board size, turn, winner, draw flag, and status text for one room
+- `POST /api/move`: submits `room=<code>&player=<token>&cell=<1-(size*size)>`
 - `POST /api/leave`: removes the player from one room
 
 The server is authoritative. The browser never decides whether a move is legal; it only sends requests and renders the JSON state returned by the server.
@@ -65,6 +65,7 @@ If you are testing from another device on the same network, replace `localhost` 
 ## How to Play
 
 - Enter the same room code in two tabs or two browsers.
+- The first player can choose the board size from `3x3` up to `8x8` when creating the room.
 - Click `Join Room` in each browser session.
 - The first player in that room becomes `X`, the second becomes `O`.
 - Click an empty square when it is your turn.

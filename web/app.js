@@ -2,17 +2,20 @@ const boardEl = document.getElementById("board");
 const joinBtn = document.getElementById("joinBtn");
 const leaveBtn = document.getElementById("leaveBtn");
 const roomInput = document.getElementById("roomInput");
+const sizeSelect = document.getElementById("sizeSelect");
 const roomLabelEl = document.getElementById("roomLabel");
 const playerMarkEl = document.getElementById("playerMark");
 const statusTextEl = document.getElementById("statusText");
 const playersTextEl = document.getElementById("playersText");
-const turnTextEl = document.getElementById("turnText");
+const sizeTextEl = document.getElementById("sizeText");
 const turnBadgeEl = document.getElementById("turnBadge");
 const themeBtn = document.getElementById("themeBtn");
+const themeIcon = document.getElementById("themeIcon");
 
 const state = {
   token: sessionStorage.getItem("ttt-player-token") || "",
   room: sessionStorage.getItem("ttt-room-code") || "",
+  boardSize: Number(sessionStorage.getItem("ttt-board-size") || "3"),
   canMove: false,
   polling: null,
   theme: localStorage.getItem("ttt-theme") || "light"
@@ -22,9 +25,12 @@ function normalizeRoom(value) {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
 }
 
-function createBoard() {
+function createBoard(size) {
   boardEl.innerHTML = "";
-  for (let i = 0; i < 9; i += 1) {
+  boardEl.style.setProperty("--board-size", String(size));
+  boardEl.dataset.size = String(size);
+
+  for (let i = 0; i < size * size; i += 1) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "cell";
@@ -34,9 +40,10 @@ function createBoard() {
   }
 }
 
-function saveSession(token, room) {
+function saveSession(token, room, boardSize = state.boardSize) {
   state.token = token || "";
   state.room = room || "";
+  state.boardSize = boardSize;
 
   if (state.token) {
     sessionStorage.setItem("ttt-player-token", state.token);
@@ -49,13 +56,16 @@ function saveSession(token, room) {
   } else {
     sessionStorage.removeItem("ttt-room-code");
   }
+
+  sessionStorage.setItem("ttt-board-size", String(state.boardSize));
 }
 
 function applyTheme(theme) {
   state.theme = theme === "dark" ? "dark" : "light";
   document.documentElement.dataset.theme = state.theme;
   localStorage.setItem("ttt-theme", state.theme);
-  themeBtn.textContent = state.theme === "dark" ? "Light mode" : "Dark mode";
+  themeBtn.setAttribute("aria-label", state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  themeIcon.textContent = state.theme === "dark" ? "☀" : "☾";
 }
 
 async function api(path, options = {}) {
@@ -77,9 +87,13 @@ function setJoinedState(joined) {
   joinBtn.disabled = joined;
   leaveBtn.disabled = !joined;
   roomInput.disabled = joined;
+  sizeSelect.disabled = joined;
 }
 
 function renderBoard(board, canMove) {
+  if (boardEl.childElementCount !== board.length) {
+    createBoard(state.boardSize);
+  }
   const cells = boardEl.querySelectorAll(".cell");
   cells.forEach((cellEl, index) => {
     const value = board[index];
@@ -91,34 +105,34 @@ function renderBoard(board, canMove) {
 }
 
 function resetView() {
-  renderBoard("_________", false);
+  createBoard(state.boardSize);
+  renderBoard("_".repeat(state.boardSize * state.boardSize), false);
   playerMarkEl.textContent = "Not joined";
   playersTextEl.textContent = "0 / 2";
-  turnTextEl.textContent = "Waiting";
+  sizeTextEl.textContent = `${state.boardSize} x ${state.boardSize}`;
   turnBadgeEl.textContent = "Idle";
   roomLabelEl.textContent = state.room || "None";
 }
 
 function updateUi(snapshot) {
   state.canMove = Boolean(snapshot.canMove);
+  state.boardSize = Number(snapshot.boardSize);
+  sizeSelect.value = String(state.boardSize);
 
   renderBoard(snapshot.board, state.canMove);
   roomLabelEl.textContent = snapshot.room;
   playerMarkEl.textContent = snapshot.role === "player" ? `Player ${snapshot.yourMark}` : "Spectator";
   playersTextEl.textContent = `${snapshot.playersConnected} / 2`;
   statusTextEl.textContent = snapshot.status;
+  sizeTextEl.textContent = `${snapshot.boardSize} x ${snapshot.boardSize}`;
 
   if (snapshot.winner !== "-") {
-    turnTextEl.textContent = `Winner ${snapshot.winner}`;
     turnBadgeEl.textContent = `Winner ${snapshot.winner}`;
   } else if (snapshot.draw) {
-    turnTextEl.textContent = "Draw";
     turnBadgeEl.textContent = "Draw";
   } else if (!snapshot.gameStarted) {
-    turnTextEl.textContent = "Waiting";
     turnBadgeEl.textContent = "Waiting";
   } else {
-    turnTextEl.textContent = `Player ${snapshot.currentTurn}`;
     turnBadgeEl.textContent = `Turn ${snapshot.currentTurn}`;
   }
 
@@ -135,7 +149,8 @@ async function joinRoom() {
   }
 
   try {
-    const body = new URLSearchParams({ room: desiredRoom });
+    const requestedSize = String(Number(sizeSelect.value || state.boardSize || 3));
+    const body = new URLSearchParams({ room: desiredRoom, size: requestedSize });
     if (state.token) {
       body.set("token", state.token);
     }
@@ -144,8 +159,9 @@ async function joinRoom() {
       body
     });
 
-    saveSession(data.token, data.room);
+    saveSession(data.token, data.room, Number(data.boardSize || requestedSize));
     roomInput.value = data.room;
+    sizeSelect.value = String(state.boardSize);
     statusTextEl.textContent = data.message;
     setJoinedState(true);
     await refreshState();
@@ -174,6 +190,7 @@ async function leaveRoom() {
     saveSession("", state.room);
     setJoinedState(false);
     playerMarkEl.textContent = "Not joined";
+    sizeSelect.value = String(state.boardSize);
   }
 }
 
@@ -195,6 +212,7 @@ async function refreshState() {
     if (error.message.includes("does not exist")) {
       saveSession("", "");
       roomInput.value = "";
+      sizeSelect.value = String(state.boardSize);
       roomLabelEl.textContent = "None";
     }
     statusTextEl.textContent = error.message;
@@ -253,9 +271,10 @@ themeBtn.addEventListener("click", () => {
   applyTheme(state.theme === "dark" ? "light" : "dark");
 });
 
-createBoard();
+createBoard(state.boardSize);
 applyTheme(state.theme);
 roomInput.value = state.room;
+sizeSelect.value = String(state.boardSize);
 resetView();
 refreshState();
 state.polling = window.setInterval(refreshState, 1000);

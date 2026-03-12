@@ -18,7 +18,8 @@
 
 #define DEFAULT_PORT 8784
 #define BACKLOG 8
-#define BOARD_CELLS 9
+#define MAX_BOARD_SIZE 8
+#define MAX_BOARD_CELLS (MAX_BOARD_SIZE * MAX_BOARD_SIZE)
 #define REQUEST_BUF_SIZE 8192
 #define TOKEN_SIZE 40
 #define ROOM_CODE_SIZE 16
@@ -35,7 +36,8 @@ typedef struct {
 typedef struct {
     int in_use;
     char code[ROOM_CODE_SIZE];
-    char board[BOARD_CELLS];
+    int board_size;
+    char board[MAX_BOARD_CELLS];
     Player players[2];
     int current_turn;
     int move_count;
@@ -80,23 +82,44 @@ static int send_all(int fd, const void *buf, size_t len) {
     return 0;
 }
 
-static int check_winner(const char board[BOARD_CELLS]) {
-    static const int wins[8][3] = {
-        {0, 1, 2}, {3, 4, 5}, {6, 7, 8},
-        {0, 3, 6}, {1, 4, 7}, {2, 5, 8},
-        {0, 4, 8}, {2, 4, 6}
-    };
+static int check_line(const char *board, int board_size, int row, int col, int row_step, int col_step) {
+    char first = board[(row * board_size) + col];
+    if (first == ' ') {
+        return 0;
+    }
 
-    for (int i = 0; i < 8; ++i) {
-        const int a = wins[i][0];
-        const int b = wins[i][1];
-        const int c = wins[i][2];
-        if (board[a] != ' ' && board[a] == board[b] && board[b] == board[c]) {
-            return board[a];
+    for (int step = 1; step < board_size; ++step) {
+        int next_row = row + (row_step * step);
+        int next_col = col + (col_step * step);
+        if (board[(next_row * board_size) + next_col] != first) {
+            return 0;
         }
     }
 
-    return 0;
+    return first;
+}
+
+static int check_winner(const char *board, int board_size) {
+    for (int row = 0; row < board_size; ++row) {
+        int row_win = check_line(board, board_size, row, 0, 0, 1);
+        if (row_win) {
+            return row_win;
+        }
+    }
+
+    for (int col = 0; col < board_size; ++col) {
+        int col_win = check_line(board, board_size, 0, col, 1, 0);
+        if (col_win) {
+            return col_win;
+        }
+    }
+
+    int diag_win = check_line(board, board_size, 0, 0, 1, 1);
+    if (diag_win) {
+        return diag_win;
+    }
+
+    return check_line(board, board_size, 0, board_size - 1, 1, -1);
 }
 
 static void set_status(Room *room, const char *fmt, ...) {
@@ -107,7 +130,8 @@ static void set_status(Room *room, const char *fmt, ...) {
 }
 
 static void reset_board(Room *room) {
-    for (int i = 0; i < BOARD_CELLS; ++i) {
+    int cells = room->board_size * room->board_size;
+    for (int i = 0; i < cells; ++i) {
         room->board[i] = ' ';
     }
     room->current_turn = 0;
@@ -117,9 +141,10 @@ static void reset_board(Room *room) {
     room->draw = 0;
 }
 
-static void init_room(Room *room, const char *code) {
+static void init_room(Room *room, const char *code, int board_size) {
     memset(room, 0, sizeof(*room));
     room->in_use = 1;
+    room->board_size = board_size;
     snprintf(room->code, sizeof(room->code), "%s", code);
     room->players[0].mark = 'X';
     room->players[1].mark = 'O';
@@ -132,11 +157,16 @@ static void init_server(ServerState *server) {
     server->token_seed = 1U;
 }
 
-static void board_to_wire(const Room *room, char out[BOARD_CELLS + 1]) {
-    for (int i = 0; i < BOARD_CELLS; ++i) {
+static void board_to_wire(const Room *room, char *out, size_t out_size) {
+    int cells = room->board_size * room->board_size;
+    if (out_size <= (size_t)cells) {
+        return;
+    }
+
+    for (int i = 0; i < cells; ++i) {
         out[i] = (room->board[i] == ' ') ? '_' : room->board[i];
     }
-    out[BOARD_CELLS] = '\0';
+    out[cells] = '\0';
 }
 
 static void generate_token(ServerState *server, Room *room, int slot) {
@@ -204,14 +234,28 @@ static Room *find_room(ServerState *server, const char *code) {
     return NULL;
 }
 
-static Room *create_room(ServerState *server, const char *code) {
+static Room *create_room(ServerState *server, const char *code, int board_size) {
     for (int i = 0; i < MAX_ROOMS; ++i) {
         if (!server->rooms[i].in_use) {
-            init_room(&server->rooms[i], code);
+            init_room(&server->rooms[i], code, board_size);
             return &server->rooms[i];
         }
     }
     return NULL;
+}
+
+static int parse_board_size(const char *input) {
+    long value;
+
+    if (input == NULL || input[0] == '\0') {
+        return 3;
+    }
+
+    value = strtol(input, NULL, 10);
+    if (value < 3 || value > MAX_BOARD_SIZE) {
+        return 0;
+    }
+    return (int)value;
 }
 
 static int normalize_room_code(const char *input, char *out, size_t out_size) {
@@ -516,12 +560,12 @@ static int respond_file(int client_fd, const char *path, const char *content_typ
 }
 
 static void write_room_state_json(Room *room, int player_index, char *out, size_t out_size) {
-    char board[BOARD_CELLS + 1];
+    char board[MAX_BOARD_CELLS + 1];
     const char *role = "spectator";
     char your_mark = '-';
     int can_move = 0;
 
-    board_to_wire(room, board);
+    board_to_wire(room, board, sizeof(board));
 
     if (player_index >= 0) {
         role = "player";
@@ -539,6 +583,7 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
              "{"
              "\"ok\":true,"
              "\"room\":\"%s\","
+             "\"boardSize\":%d,"
              "\"board\":\"%s\","
              "\"gameStarted\":%s,"
              "\"winner\":\"%c\","
@@ -551,6 +596,7 @@ static void write_room_state_json(Room *room, int player_index, char *out, size_
              "\"playersConnected\":%d"
              "}",
              room->code,
+             room->board_size,
              board,
              room->game_started ? "true" : "false",
              room->winner ? room->winner : '-',
@@ -567,12 +613,15 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
     char requested_room[ROOM_CODE_SIZE];
     char normalized_room[ROOM_CODE_SIZE];
     char token[TOKEN_SIZE];
+    char size_text[16];
     char body[512];
     Room *room;
     int slot;
+    int requested_size;
 
     query_param(request->body, "room", requested_room, sizeof(requested_room));
     query_param(request->body, "token", token, sizeof(token));
+    query_param(request->body, "size", size_text, sizeof(size_text));
 
     if (!normalize_room_code(requested_room, normalized_room, sizeof(normalized_room))) {
         respond_json(client_fd,
@@ -581,9 +630,22 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
         return;
     }
 
+    requested_size = parse_board_size(size_text);
+    if (requested_size == 0) {
+        respond_json(client_fd,
+                     "400 Bad Request",
+                     "{\"ok\":false,\"error\":\"bad_size\",\"message\":\"Choose a board size from 3 to 8.\"}");
+        return;
+    }
+
     room = find_room(server, normalized_room);
     if (room == NULL) {
-        room = create_room(server, normalized_room);
+        room = create_room(server, normalized_room, requested_size);
+    } else if (size_text[0] != '\0' && room->board_size != requested_size) {
+        respond_json(client_fd,
+                     "409 Conflict",
+                     "{\"ok\":false,\"error\":\"size_locked\",\"message\":\"This room already exists with a different board size.\"}");
+        return;
     }
     if (room == NULL) {
         respond_json(client_fd,
@@ -616,11 +678,13 @@ static void handle_join(ServerState *server, int client_fd, const HttpRequest *r
              "{"
              "\"ok\":true,"
              "\"room\":\"%s\","
+             "\"boardSize\":%d,"
              "\"token\":\"%s\","
              "\"mark\":\"%c\","
              "\"message\":\"Joined room %s as Player %c.\""
              "}",
              room->code,
+             room->board_size,
              room->players[slot].token,
              room->players[slot].mark,
              room->code,
@@ -671,6 +735,7 @@ static void handle_move(ServerState *server, int client_fd, const HttpRequest *r
     Room *room;
     int slot;
     long cell;
+    int max_cell;
 
     (void)server;
     query_param(request->body, "room", room_code, sizeof(room_code));
@@ -716,11 +781,12 @@ static void handle_move(ServerState *server, int client_fd, const HttpRequest *r
         return;
     }
 
+    max_cell = room->board_size * room->board_size;
     cell = strtol(cell_text, NULL, 10);
-    if (cell < 1 || cell > 9) {
+    if (cell < 1 || cell > max_cell) {
         respond_json(client_fd,
                      "400 Bad Request",
-                     "{\"ok\":false,\"error\":\"bad_cell\",\"message\":\"Cell must be between 1 and 9.\"}");
+                     "{\"ok\":false,\"error\":\"bad_cell\",\"message\":\"Cell is outside the current board.\"}");
         return;
     }
 
@@ -733,12 +799,12 @@ static void handle_move(ServerState *server, int client_fd, const HttpRequest *r
 
     room->board[cell - 1] = room->players[slot].mark;
     room->move_count++;
-    room->winner = check_winner(room->board);
+    room->winner = check_winner(room->board, room->board_size);
 
     if (room->winner) {
         room->game_started = 0;
         set_status(room, "Player %c won room %s.", room->winner, room->code);
-    } else if (room->move_count == BOARD_CELLS) {
+    } else if (room->move_count == max_cell) {
         room->draw = 1;
         room->game_started = 0;
         set_status(room, "Room %s ended in a draw.", room->code);

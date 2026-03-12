@@ -11,21 +11,34 @@
     <section class="hero">
       <div>
         <h1>Tic-Tac-Toe</h1>
-        <p class="subhead">Private rooms, quick rounds, one link away.</p>
+        <p class="subhead">Forge a room, pick the arena size, and settle it turn by turn.</p>
       </div>
-      <button id="themeBtn" class="theme-toggle" type="button" aria-label="Toggle theme">Dark mode</button>
+      <button id="themeBtn" class="theme-toggle" type="button" aria-label="Toggle theme">
+        <span id="themeIcon" aria-hidden="true">◐</span>
+      </button>
     </section>
 
     <section class="layout">
       <article class="panel setup-panel">
         <div class="panel-copy">
           <p class="label">Room</p>
-          <h2>Join with a custom code</h2>
+          <h2>Create your match lobby</h2>
         </div>
         <div class="room-form">
           <label class="field">
             <span>Room code</span>
             <input id="roomInput" type="text" maxlength="12" placeholder="ALPHA7" autocomplete="off">
+          </label>
+          <label class="field">
+            <span>Board size</span>
+            <select id="sizeSelect">
+              <option value="3">3 x 3</option>
+              <option value="4">4 x 4</option>
+              <option value="5">5 x 5</option>
+              <option value="6">6 x 6</option>
+              <option value="7">7 x 7</option>
+              <option value="8">8 x 8</option>
+            </select>
           </label>
           <div class="action-row">
             <button id="joinBtn" class="primary" type="button">Join Room</button>
@@ -65,13 +78,13 @@
               <p id="playersText">0 / 2</p>
             </div>
             <div>
-              <p class="label">Turn</p>
-              <p id="turnText">Waiting</p>
+              <p class="label">Arena</p>
+              <p id="sizeText">3 x 3</p>
             </div>
           </div>
           <div>
             <p class="label">Notes</p>
-            <p class="instructions">Room codes are shared manually. Use only letters and numbers, up to 12 characters.</p>
+            <p class="instructions">The first player to create a room locks its board size. Share the same room code so another player can join.</p>
           </div>
         </div>
       </article>
