@@ -256,32 +256,6 @@ static int find_player_in_room(Room *room, const char *token) {
     return -1;
 }
 
-static Room *find_room_by_token(ServerState *server, const char *token, int *slot_out) {
-    if (slot_out != NULL) {
-        *slot_out = -1;
-    }
-
-    if (token == NULL || token[0] == '\0') {
-        return NULL;
-    }
-
-    for (int i = 0; i < MAX_ROOMS; ++i) {
-        Room *room = &server->rooms[i];
-        if (!room->in_use) {
-            continue;
-        }
-        int slot = find_player_in_room(room, token);
-        if (slot >= 0) {
-            if (slot_out != NULL) {
-                *slot_out = slot;
-            }
-            return room;
-        }
-    }
-
-    return NULL;
-}
-
 static void cleanup_inactive_rooms(ServerState *server) {
     time_t now = time(NULL);
 
