@@ -996,6 +996,11 @@ static void handle_request(ServerState *server, int client_fd, const HttpRequest
         return;
     }
 
+    if (strcmp(request->method, "GET") == 0 && strcmp(request->path, "/background.png") == 0) {
+        respond_file(client_fd, "background.png", "image/png");
+        return;
+    }
+
     if (strcmp(request->method, "POST") == 0 && strcmp(request->path, "/api/join") == 0) {
         handle_join(server, client_fd, request);
         return;

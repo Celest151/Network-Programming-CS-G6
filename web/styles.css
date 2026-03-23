@@ -457,3 +457,11 @@ h2 {
     align-items: flex-start;
   }
 }
+:root[data-theme="dark"] body {
+  background:
+    linear-gradient(rgba(10, 14, 22, 0.72), rgba(10, 14, 22, 0.78)),
+    radial-gradient(circle at top left, rgba(118, 198, 255, 0.14), transparent 26%),
+    url(/background.png) center / cover no-repeat fixed,
+    linear-gradient(160deg, var(--bg), var(--bg-secondary));
+}
+
